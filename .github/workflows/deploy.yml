@@ -2,7 +2,7 @@ name: Deploy to EC2
 
 on:
   push:
-    branches: [main]
+    branches: [master]
   workflow_dispatch:
 
 jobs:
@@ -13,6 +13,14 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      # 🔍 DEBUG (you can remove later)
+      - name: Debug project structure
+        run: |
+          echo "Root folder:"
+          ls -la
+          echo "Inside nodejs-backend:"
+          ls -la nodejs-backend
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -25,7 +33,7 @@ jobs:
         working-directory: ./nodejs-backend
         run: npm ci
 
-      - name: Build TypeScript
+      - name: Build project
         working-directory: ./nodejs-backend
         run: npm run build
 
@@ -33,13 +41,13 @@ jobs:
         run: |
           mkdir -p deploy
           cp -r nodejs-backend/dist deploy/
-          cp -r nodejs-backend/src deploy/
+          cp -r nodejs-backend/src deploy/ || true
           cp nodejs-backend/package*.json deploy/
           cp nodejs-backend/ecosystem.config.cjs deploy/ || true
           [ -f nodejs-backend/.env.example ] && cp nodejs-backend/.env.example deploy/ || echo "No env file"
           tar -czf deploy.tar.gz -C deploy .
 
-      - name: Upload build artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: deployment-package
@@ -76,10 +84,11 @@ jobs:
 
             sudo chown -R $USER:$USER /var/www/express-app
 
-            echo "Extracting..."
+            echo "Extracting deployment..."
             tar --overwrite -xzf /tmp/deploy.tar.gz -C /var/www/express-app
             rm /tmp/deploy.tar.gz
 
+            echo "Installing dependencies..."
             npm ci --only=production
 
             if [ ! -f .env ]; then
@@ -100,3 +109,19 @@ jobs:
           EOF
 
           rm key.pem
+
+      - name: Verify deployment
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+        run: |
+          echo "Waiting for app..."
+          sleep 10
+
+          status=$(curl -s -o /dev/null -w "%{http_code}" http://${EC2_HOST} || echo "000")
+
+          if [ "$status" = "200" ] || [ "$status" = "301" ] || [ "$status" = "302" ]; then
+            echo "✅ Deployment success: $status"
+          else
+            echo "❌ Deployment failed: $status"
+            exit 1
+          fi
