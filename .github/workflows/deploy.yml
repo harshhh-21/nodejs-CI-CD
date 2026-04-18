@@ -25,7 +25,7 @@ jobs:
 
       - name: Build TypeScript
         run: npm run build
-
+        working-directory: ./nodejs-backend
       - name: Create deployment package (without node_modules)
         run: |
           mkdir -p deploy
