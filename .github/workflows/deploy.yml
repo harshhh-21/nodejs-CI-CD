@@ -3,128 +3,44 @@ name: Deploy to EC2
 on:
   push:
     branches: [master]
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
   workflow_dispatch:
 
 jobs:
   build:
-    name: Build Application
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      # 🔍 DEBUG (you can remove later)
-      - name: Debug project structure
+      - name: Debug structure
         run: |
-          echo "Root folder:"
           ls -la
-          echo "Inside nodejs-backend:"
-          ls -la nodejs-backend
+          ls -la code
 
-      - name: Setup Node.js
+      - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: "24"
+          node-version: "22"
           cache: "npm"
-          cache-dependency-path: nodejs-backend/package-lock.json
+          cache-dependency-path: code/package-lock.json
 
       - name: Install dependencies
-        working-directory: ./nodejs-backend
+        working-directory: ./code
         run: npm ci
 
-      - name: Build project
-        working-directory: ./nodejs-backend
+      - name: Build
+        working-directory: ./code
         run: npm run build
 
-      - name: Create deployment package
+      - name: Create package
         run: |
-          mkdir -p deploy
-          cp -r nodejs-backend/dist deploy/
-          cp -r nodejs-backend/src deploy/ || true
-          cp nodejs-backend/package*.json deploy/
-          cp nodejs-backend/ecosystem.config.cjs deploy/ || true
-          [ -f nodejs-backend/.env.example ] && cp nodejs-backend/.env.example deploy/ || echo "No env file"
+          mkdir deploy
+          cp -r code/dist deploy/
+          cp code/package*.json deploy/
+          cp code/ecosystem.config.cjs deploy/ || true
           tar -czf deploy.tar.gz -C deploy .
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: deployment-package
           path: deploy.tar.gz
-          retention-days: 1
-
-  deploy:
-    name: Deploy to EC2
-    needs: build
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Download artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: deployment-package
-
-      - name: Deploy via SSH
-        env:
-          EC2_HOST: ${{ secrets.EC2_HOST }}
-          EC2_USERNAME: ${{ secrets.EC2_USERNAME }}
-          SSH_PRIVATE_KEY: ${{ secrets.EC2_SSH_KEY }}
-        run: |
-          echo "$SSH_PRIVATE_KEY" > key.pem
-          chmod 600 key.pem
-
-          scp -i key.pem -o StrictHostKeyChecking=no \
-            deploy.tar.gz ${EC2_USERNAME}@${EC2_HOST}:/tmp/
-
-          ssh -i key.pem -o StrictHostKeyChecking=no \
-            ${EC2_USERNAME}@${EC2_HOST} << 'EOF'
-
-            cd /var/www/express-app
-
-            sudo chown -R $USER:$USER /var/www/express-app
-
-            echo "Extracting deployment..."
-            tar --overwrite -xzf /tmp/deploy.tar.gz -C /var/www/express-app
-            rm /tmp/deploy.tar.gz
-
-            echo "Installing dependencies..."
-            npm ci --only=production
-
-            if [ ! -f .env ]; then
-              echo "NODE_ENV=production" > .env
-              echo "PORT=8000" >> .env
-            fi
-
-            mkdir -p logs
-
-            if pm2 describe express-app > /dev/null 2>&1; then
-              pm2 reload ecosystem.config.cjs --update-env
-            else
-              pm2 start ecosystem.config.cjs
-            fi
-
-            pm2 save
-
-          EOF
-
-          rm key.pem
-
-      - name: Verify deployment
-        env:
-          EC2_HOST: ${{ secrets.EC2_HOST }}
-        run: |
-          echo "Waiting for app..."
-          sleep 10
-
-          status=$(curl -s -o /dev/null -w "%{http_code}" http://${EC2_HOST} || echo "000")
-
-          if [ "$status" = "200" ] || [ "$status" = "301" ] || [ "$status" = "302" ]; then
-            echo "✅ Deployment success: $status"
-          else
-            echo "❌ Deployment failed: $status"
-            exit 1
-          fi
